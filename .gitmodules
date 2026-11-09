@@ -1,0 +1,3 @@
+[submodule "ext/stdromano"]
+	path = ext/stdromano
+	url = https://github.com/romainaugier/stdromano.git

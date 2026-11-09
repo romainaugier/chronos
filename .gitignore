@@ -1,0 +1,21 @@
+# MacOS files
+.DS_Store
+
+# build dirs/files
+/build
+/bin
+/lib
+/install
+compile_commands.json
+compile_flags.txt
+
+# editors
+.vscode
+.zed
+.cache
+.idea
+
+# Debug files
+*.dSYM/
+*.pdb
+*.ilk

@@ -1,0 +1,145 @@
+# SPDX-License-Identifier: BSD-3-Clause
+# Copyright (c) 2026 - Present Romain Augier
+# All rights reserved.
+
+name: CI
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  build:
+    name: ${{ matrix.platform.name }} ${{ matrix.config }}
+    runs-on: ${{ matrix.platform.os }}
+    timeout-minutes: 90
+
+    strategy:
+      fail-fast: false
+      matrix:
+        platform:
+          - { name: linux-x64, os: ubuntu-24.04 }
+          - { name: linux-arm64, os: ubuntu-24.04-arm }
+          - { name: macos-arm64, os: macos-15 }
+          - { name: windows-x64, os: windows-2022, arch: x64 }
+          - { name: windows-arm64, os: windows-11-arm, arch: arm64 }
+        config: [Release, Debug]
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - uses: lukka/get-cmake@latest
+
+      - name: Linux dependencies
+        if: runner.os == 'Linux'
+        run: |
+          # nasm assembles the stdromano x86-64 kernels
+          if [[ "$(uname -m)" == "x86_64" ]]; then
+            sudo apt-get update
+            sudo apt-get install -y nasm
+          fi
+          # vcpkg has no prebuilt tools for arm64 linux
+          if [[ "$(uname -m)" == "aarch64" ]]; then echo "VCPKG_FORCE_SYSTEM_BINARIES=1" >> "$GITHUB_ENV"; fi
+
+      - name: stdromano commit
+        id: stdromano
+        run: |
+          echo "sha=$(git rev-parse HEAD:ext/stdromano)" >> "$GITHUB_OUTPUT"
+          echo "image=$ImageOS-$ImageVersion" >> "$GITHUB_OUTPUT"
+
+      # The stamps in the install tell the build scripts whether stdromano has to be rebuilt
+      - name: Cache the stdromano install
+        uses: actions/cache@v4
+        with:
+          path: ext/stdromano/install
+          key: stdromano-${{ matrix.platform.name }}-${{ steps.stdromano.outputs.image }}-${{ matrix.config }}-${{ steps.stdromano.outputs.sha }}-${{ hashFiles('build.sh', 'build.bat') }}
+
+      - name: Cache vcpkg
+        uses: actions/cache@v4
+        with:
+          path: ext/stdromano/vcpkg
+          key: vcpkg-${{ matrix.platform.name }}-${{ steps.stdromano.outputs.sha }}
+          restore-keys: vcpkg-${{ matrix.platform.name }}-
+
+      - name: Build and test (Unix)
+        if: runner.os != 'Windows'
+        run: ./build.sh --tests ${{ matrix.config == 'Debug' && '--debug' || '' }}
+
+      - name: Build and test (Windows)
+        if: runner.os == 'Windows'
+        shell: cmd
+        run: build.bat --tests --arch:${{ matrix.platform.arch }} ${{ matrix.config == 'Debug' && '--debug' || '' }}
+
+      - name: Test log
+        if: failure()
+        run: cat build/Testing/Temporary/LastTest.log || true
+
+  sanitizers:
+    name: linux-x64 ${{ matrix.sanitizers.name }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+
+    strategy:
+      fail-fast: false
+      matrix:
+        sanitizers:
+          - { name: asan-ubsan-lsan, flags: --addrsan --ubsan --leaksan }
+          - { name: tsan, flags: --threadsan }
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - uses: lukka/get-cmake@latest
+
+      - name: Linux dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y nasm
+
+      # The sanitizers runtimes do not support the default mmap randomization of the recent kernels
+      - name: Lower the mmap randomization
+        run: sudo sysctl vm.mmap_rnd_bits=28
+
+      - name: stdromano commit
+        id: stdromano
+        run: |
+          echo "sha=$(git rev-parse HEAD:ext/stdromano)" >> "$GITHUB_OUTPUT"
+          echo "image=$ImageOS-$ImageVersion" >> "$GITHUB_OUTPUT"
+
+      - name: Cache the stdromano install
+        uses: actions/cache@v4
+        with:
+          path: ext/stdromano/install
+          key: stdromano-linux-x64-${{ steps.stdromano.outputs.image }}-${{ matrix.sanitizers.name }}-${{ steps.stdromano.outputs.sha }}-${{ hashFiles('build.sh') }}
+
+      - name: Cache vcpkg
+        uses: actions/cache@v4
+        with:
+          path: ext/stdromano/vcpkg
+          key: vcpkg-linux-x64-${{ steps.stdromano.outputs.sha }}
+          restore-keys: vcpkg-linux-x64-
+
+      - name: Build and test
+        run: ./build.sh --tests --debug ${{ matrix.sanitizers.flags }}
+
+      - name: Test log
+        if: failure()
+        run: cat build/Testing/Temporary/LastTest.log || true

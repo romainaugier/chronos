@@ -1,0 +1,6 @@
+CompileFlags:
+    Add:
+    - "-Iinclude"
+    - "-Iext/stdromano/install/include"
+    - "-DDEBUG_BUILD=1"
+    - "-std=c++17"
